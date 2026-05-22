@@ -1,5 +1,6 @@
 package com.zhlon.map.tile;
 
+import com.zhlon.map.Config;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 
@@ -11,17 +12,16 @@ import net.minecraft.world.level.Level;
  */
 public record TilePos(ResourceKey<Level> dimension, int x, int z, int zoom) {
 
-    private static final int TILE_SIZE = 512;
-
     public TilePos(ResourceKey<Level> dimension, int x, int z) {
         this(dimension, x, z, 0);
     }
 
     /** 将方块坐标转换为 Tile 坐标（zoom=0） */
     public static TilePos fromBlock(ResourceKey<Level> dimension, int blockX, int blockZ) {
+        int size = Config.tileSizeBlocks;
         return new TilePos(dimension,
-                Math.floorDiv(blockX, TILE_SIZE),
-                Math.floorDiv(blockZ, TILE_SIZE),
+                Math.floorDiv(blockX, size),
+                Math.floorDiv(blockZ, size),
                 0);
     }
 
@@ -32,22 +32,22 @@ public record TilePos(ResourceKey<Level> dimension, int x, int z, int zoom) {
 
     /** 该 Tile 左上角的方块 X 坐标 */
     public int minBlockX() {
-        return x * TILE_SIZE;
+        return x * Config.tileSizeBlocks;
     }
 
     /** 该 Tile 左上角的方块 Z 坐标 */
     public int minBlockZ() {
-        return z * TILE_SIZE;
+        return z * Config.tileSizeBlocks;
     }
 
     /** 该 Tile 右下角的方块 X 坐标（不包含） */
     public int maxBlockX() {
-        return (x + 1) * TILE_SIZE;
+        return (x + 1) * Config.tileSizeBlocks;
     }
 
     /** 该 Tile 右下角的方块 Z 坐标（不包含） */
     public int maxBlockZ() {
-        return (z + 1) * TILE_SIZE;
+        return (z + 1) * Config.tileSizeBlocks;
     }
 
     @Override

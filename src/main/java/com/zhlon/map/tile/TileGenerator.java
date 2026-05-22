@@ -4,10 +4,8 @@ import com.mojang.logging.LogUtils;
 import com.zhlon.map.Config;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.material.MapColor;
 import org.slf4j.Logger;
 
@@ -19,7 +17,7 @@ import java.util.concurrent.Executors;
  * Tile 异步地图生成器。
  *
  * <p>扫描区块中的方块，生成 RGBA 纹理和探索遮罩。
- * 所有操作在独立线程池中执行，禁止阻塞主线程。
+ * 区块数据采集在主线程完成（线程安全），纹理组装在独立线程池中执行。
  *
  * <p>颜色算法：
  * <ol>
@@ -46,18 +44,25 @@ public class TileGenerator {
                 });
     }
 
-    /** 异步生成指定 Tile */
+    /**
+     * 异步生成指定 Tile。
+     * 方块数据采集在调用线程完成（线程安全），纹理组装在后台线程执行。
+     */
     public CompletableFuture<TileData> generate(Level level, TilePos pos) {
-        return CompletableFuture.supplyAsync(() -> doGenerate(level, pos), executor);
+        ColumnData[] columns = collectColumnData(level, pos);
+        if (columns == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.supplyAsync(() -> assembleTile(pos, columns), executor);
     }
 
-    private TileData doGenerate(Level level, TilePos pos) {
+    /** 在主线程采集每个纹理像素对应的方块颜色（线程安全） */
+    private ColumnData[] collectColumnData(Level level, TilePos pos) {
         int tileSize = Config.tileSizeBlocks;
         int res = TEXTURE_RES;
         int scale = tileSize / res;
-
-        byte[] texture = new byte[res * res * 4];
-        byte[] exploredMask = new byte[res * res];
+        int total = res * res;
+        ColumnData[] columns = new ColumnData[total];
 
         int minX = pos.minBlockX();
         int minZ = pos.minBlockZ();
@@ -73,59 +78,76 @@ public class TileGenerator {
 
                 boolean explored = false;
                 int topY = worldBottom;
-
-                LevelChunk chunk = level.getChunk(blockX >> 4, blockZ >> 4);
+                int color = 0;
+                boolean isWater = false;
 
                 for (int y = worldTop - 1; y >= worldBottom; y--) {
                     mutablePos.set(blockX, y, blockZ);
-                    BlockState state = chunk.getBlockState(mutablePos);
+                    BlockState state = level.getBlockState(mutablePos);
 
                     if (state.isAir()) continue;
 
                     topY = y;
                     explored = true;
 
-                    int color = getBlockColor(state, level, mutablePos);
+                    MapColor mapColor = state.getMapColor(level, mutablePos);
+                    if (mapColor == MapColor.NONE) {
+                        mapColor = MapColor.STONE;
+                    }
+                    int mcColor = mapColor.col;
+                    int r = (mcColor >> 16) & 0xFF;
+                    int g = (mcColor >> 8) & 0xFF;
+                    int b = mcColor & 0xFF;
+                    color = (0xFF << 24) | (r << 16) | (g << 8) | b;
 
-                    float heightFactor = (float)(y - worldBottom) / (worldTop - worldBottom);
-                    color = applyHeightShade(color, heightFactor);
-
-                    color = applyWaterBlend(color, state);
-
-                    int idx = (texZ * res + texX) * 4;
-                    texture[idx]     = (byte) ((color >> 16) & 0xFF);
-                    texture[idx + 1] = (byte) ((color >> 8) & 0xFF);
-                    texture[idx + 2] = (byte) (color & 0xFF);
-                    texture[idx + 3] = (byte) 0xFF;
+                    isWater = state.getBlock() == Blocks.WATER;
 
                     break;
                 }
 
-                exploredMask[texZ * res + texX] = (byte) (explored ? 1 : 0);
+                float heightFactor = explored
+                        ? (float)(topY - worldBottom) / (worldTop - worldBottom)
+                        : 0f;
+
+                int idx = texZ * res + texX;
+                columns[idx] = new ColumnData(explored, color, heightFactor, isWater);
             }
         }
 
-        byte[] compressed = compress(texture);
-        long now = System.currentTimeMillis();
-
-        return new TileData(pos, 1, now, compressed, exploredMask);
+        return columns;
     }
 
-    /** 获取方块在地图上的颜色 */
-    private int getBlockColor(BlockState state, Level level, BlockPos pos) {
-        MapColor mapColor = state.getMapColor(level, pos);
-        if (mapColor == MapColor.NONE) {
-            mapColor = MapColor.STONE;
+    /** 在异步线程组装纹理（纯数据计算，不访问 Minecraft 对象） */
+    private TileData assembleTile(TilePos pos, ColumnData[] columns) {
+        int res = TEXTURE_RES;
+        byte[] texture = new byte[res * res * 4];
+        byte[] exploredMask = new byte[res * res];
+
+        for (int i = 0; i < columns.length; i++) {
+            ColumnData col = columns[i];
+            exploredMask[i] = (byte) (col.explored ? 1 : 0);
+
+            if (!col.explored) continue;
+
+            int color = col.color;
+            color = applyHeightShade(color, col.heightFactor);
+            if (col.isWater) {
+                color = applyWaterBlend(color);
+            }
+
+            int idx = i * 4;
+            texture[idx]     = (byte) ((color >> 16) & 0xFF);
+            texture[idx + 1] = (byte) ((color >> 8) & 0xFF);
+            texture[idx + 2] = (byte) (color & 0xFF);
+            texture[idx + 3] = (byte) 0xFF;
         }
-        int mcColor = mapColor.col;
-        int r = (mcColor >> 16) & 0xFF;
-        int g = (mcColor >> 8) & 0xFF;
-        int b = mcColor & 0xFF;
-        return (0xFF << 24) | (r << 16) | (g << 8) | b;
+
+        long now = System.currentTimeMillis();
+        return new TileData(pos, 1, now, texture, exploredMask);
     }
 
     /** 高度阴影：越高越亮，越低越暗 */
-    private int applyHeightShade(int color, float heightFactor) {
+    private static int applyHeightShade(int color, float heightFactor) {
         float shade = 0.6f + heightFactor * 0.4f;
         int r = clamp((int) (((color >> 16) & 0xFF) * shade));
         int g = clamp((int) (((color >> 8) & 0xFF) * shade));
@@ -134,27 +156,33 @@ public class TileGenerator {
     }
 
     /** 水体颜色混合 */
-    private int applyWaterBlend(int color, BlockState state) {
-        Block block = state.getBlock();
-        if (block == Blocks.WATER) {
-            int r = (color >> 16) & 0xFF;
-            int g = (color >> 8) & 0xFF;
-            int b = color & 0xFF;
-            r = (r + 48) / 2;
-            g = (g + 96) / 2;
-            b = (b + 176) / 2;
-            return (0xFF << 24) | (r << 16) | (g << 8) | b;
-        }
-        return color;
-    }
-
-    /** 简易 RLE 压缩（占位实现，后续可替换为 ZSTD） */
-    private byte[] compress(byte[] data) {
-        return data;
+    private static int applyWaterBlend(int color) {
+        int r = (color >> 16) & 0xFF;
+        int g = (color >> 8) & 0xFF;
+        int b = color & 0xFF;
+        r = (r + 48) / 2;
+        g = (g + 96) / 2;
+        b = (b + 176) / 2;
+        return (0xFF << 24) | (r << 16) | (g << 8) | b;
     }
 
     private static int clamp(int value) {
         return Math.max(0, Math.min(255, value));
+    }
+
+    /** 列采集数据：异步线程只需要这些纯数据进行计算 */
+    private static class ColumnData {
+        final boolean explored;
+        final int color;
+        final float heightFactor;
+        final boolean isWater;
+
+        ColumnData(boolean explored, int color, float heightFactor, boolean isWater) {
+            this.explored = explored;
+            this.color = color;
+            this.heightFactor = heightFactor;
+            this.isWater = isWater;
+        }
     }
 
     public void shutdown() {

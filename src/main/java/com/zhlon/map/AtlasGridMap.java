@@ -3,6 +3,7 @@ package com.zhlon.map;
 import com.mojang.logging.LogUtils;
 import com.zhlon.map.cache.CacheManager;
 import com.zhlon.map.network.NetworkHandler;
+import com.zhlon.map.network.TileResponsePacket;
 import com.zhlon.map.render.MinimapOverlay;
 import com.zhlon.map.render.WorldMapScreen;
 import com.zhlon.map.tile.PeerManager;
@@ -74,11 +75,20 @@ public class AtlasGridMap {
         LOGGER.info("Atlas Map common setup complete");
     }
 
-    /** 服务端 Tick：定期清理过期缓存 */
+    /** 服务端 Tick：刷新脏 Tile 并广播，定期清理过期缓存 */
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         long tickCount = event.getServer().getTickCount();
+
+        if (tickCount % 40 == 0) {
+            event.getServer().getAllLevels().forEach(level -> {
+                TileManager.get().refreshDirtyTiles(level, tile -> {
+                    NetworkHandler.sendToAll(new TileResponsePacket(tile));
+                });
+            });
+        }
+
         if (tickCount % 1200 == 0) {
             CacheManager cacheMgr = new CacheManager(FMLPaths.GAMEDIR.get().resolve("atlasmap"));
             long maxBytes = (long) Config.maxCacheSizeMb * 1024L * 1024L;
@@ -106,13 +116,14 @@ public class AtlasGridMap {
         PeerManager.get().removePeer(event.getEntity().getUUID());
     }
 
-    /** 区块加载。 */
+    /** 区块加载时标记 tile 为已探索并触发重新生成。 */
     @SubscribeEvent
     public void onChunkLoad(ChunkEvent.Load event) {
         if (event.getLevel() instanceof Level level) {
             int chunkX = event.getChunk().getPos().x;
             int chunkZ = event.getChunk().getPos().z;
-            TileManager.get().markChunkDirty(level.dimension(), chunkX, chunkZ);
+            TilePos pos = TilePos.fromChunk(level.dimension(), chunkX, chunkZ);
+            TileManager.get().markVisited(pos);
         }
     }
 
@@ -173,19 +184,29 @@ public class AtlasGridMap {
     /** 客户端 Forge 事件处理（需要实例注册，不能是静态内部类里直接注解） */
     public static class ClientForgeEvents {
 
+        private long lastTileRefreshMs = System.currentTimeMillis();
+
         /** 渲染 HUD 小地图。 */
         @SubscribeEvent
         public void onRenderOverlay(RenderGuiOverlayEvent.Post event) {
             ClientModEvents.MINIMAP.render(event);
         }
 
-        /** 客户端 Tick：检测按键打开世界地图。 */
+        /** 客户端 Tick：检测按键打开世界地图 & 定期刷新脏 Tile。 */
         @SubscribeEvent
         public void onClientTick(TickEvent.ClientTickEvent event) {
             if (event.phase != TickEvent.Phase.END) return;
 
             Minecraft mc = Minecraft.getInstance();
             if (mc.player == null || mc.screen != null) return;
+
+            long now = System.currentTimeMillis();
+            if (now - lastTileRefreshMs >= 2000) {
+                lastTileRefreshMs = now;
+                if (mc.level != null && Config.enableMinimap) {
+                    TileManager.get().refreshDirtyTiles(mc.level, null);
+                }
+            }
 
             while (ClientModEvents.OPEN_MAP_KEY.consumeClick()) {
                 mc.setScreen(new WorldMapScreen());

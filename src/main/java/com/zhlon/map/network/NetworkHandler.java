@@ -18,7 +18,7 @@ public final class NetworkHandler {
 
     private static final String PROTOCOL = "1";
     private static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
-            new ResourceLocation(AtlasGridMap.MODID, "main"),
+            ResourceLocation.fromNamespaceAndPath(AtlasGridMap.MODID, "main"),
             () -> PROTOCOL,
             PROTOCOL::equals,
             PROTOCOL::equals

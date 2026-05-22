@@ -1,0 +1,7 @@
+{
+  "screen.atlasmap.world_map": "世界地图",
+  "screen.atlasmap.help": "ESC - 关闭 | 方向键/WASD - 移动 | 滚轮 - 缩放 | 右键 - 传送",
+  "screen.atlasmap.teleport_to": "传送到 (%d, %d, %d)",
+  "screen.atlasmap.cursor": "光标: (%d, %d, %d)",
+  "screen.atlasmap.locked": "未探索 (%d, %d)"
+}

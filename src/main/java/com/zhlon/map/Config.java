@@ -90,14 +90,14 @@ public class Config {
             .comment("Minimap position on screen")
             .defineEnum("minimapPosition", MinimapPosition.TOP_RIGHT);
 
-    /** 小地图显示尺寸（像素）。默认 160 */
+    /** 小地图显示尺寸（像素）。默认 80 */
     public static final ForgeConfigSpec.IntValue MINIMAP_SIZE = CLIENT_BUILDER
             .comment("Minimap display size in pixels")
-            .defineInRange("minimapSize", 160, 80, 320);
+            .defineInRange("minimapSize", 80, 60, 256);
 
     /** 小地图缩放级别。默认 1（1:1） */
     public static final ForgeConfigSpec.IntValue MINIMAP_ZOOM = CLIENT_BUILDER
-            .comment("Minimap zoom level")
+            .comment("Minimap zoom level (higher = more zoomed out)")
             .defineInRange("minimapZoom", 1, 1, 8);
 
     /** 小地图是否随玩家朝向旋转。默认开启 */

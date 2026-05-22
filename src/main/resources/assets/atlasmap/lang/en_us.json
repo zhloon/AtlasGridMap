@@ -1,0 +1,7 @@
+{
+  "screen.atlasmap.world_map": "World Map",
+  "screen.atlasmap.help": "ESC - Close | Arrows/WASD - Pan | Scroll - Zoom | Right-Click - Teleport",
+  "screen.atlasmap.teleport_to": "Teleport to (%d, %d, %d)",
+  "screen.atlasmap.cursor": "Cursor: (%d, %d, %d)",
+  "screen.atlasmap.locked": "Unexplored (%d, %d)"
+}
